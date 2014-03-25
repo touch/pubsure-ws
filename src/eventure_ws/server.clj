@@ -22,7 +22,7 @@
             (alter topics update-in [topic] disj channel)
             (alter channels update-in [channel] disj topic))))
   (http/send! channel (str "UNSUB " topic))
-  (when (and (= 0 (count (get @channels channel))) (:close-on-nosubs config))
+  (when (and (= 0 (count (get @channels channel))) (:close-on-nosubs? config))
     (http/close channel)))
 
 
@@ -43,7 +43,7 @@
 
 (defn- handle-data
   [server channel data]
-  (let [[command & args] (split data #"\s")]
+  (let [[command & args] (split data #"\s+")]
     (case command
       "SUB" (let [[topic last] args
                   last (try (Long/parseLong last) (catch NumberFormatException ex))]
@@ -86,7 +86,7 @@
 ;; topics = (ref {"topic" #{chan chan chan}})
 ;; channels = (ref {chan #{"topic" "topic" "topic"}})
 ;; open = (atom boolean)
-;; config = {:cache-size long, :close-on-nosubs boolean}
+;; config = {:cache-size long, :close-on-nosubs? boolean}
 (defrecord WebSocketServer [dirwriter uri stop-fn cache topics channels open config]
   Server
   (publish [this topic message]
@@ -109,16 +109,16 @@
 
 
 (defn start-server
-  [dirwriter & {:keys [port cache-size hostname close-on-nosubs]
+  [dirwriter & {:keys [port cache-size hostname close-on-nosubs?]
                 :or {port 8090
                      cache-size 0
                      hostname (. (InetAddress/getLocalHost) getHostName)
-                     close-on-nosubs true}}]
+                     close-on-nosubs? true}}]
   (let [uri (URI. (str "ws://" hostname ":" port))
         stop-fn (atom nil)
         open (atom false)
         server (WebSocketServer. dirwriter uri stop-fn (atom {}) (ref {}) (ref {}) open
-                                 {:cache-size cache-size :close-on-nosubs close-on-nosubs})]
+                                 {:cache-size cache-size :close-on-nosubs? close-on-nosubs?})]
     (reset! stop-fn (http/run-server (make-app server) {:port port}))
     (reset! open true)
     server))
