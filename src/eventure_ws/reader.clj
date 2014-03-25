@@ -22,7 +22,7 @@
 (defn- subscribe
   [{:keys [dirreader config channels open] :as state} channel topic init]
   (when-not (get-in @channels [channel topic])
-    (let [sourcesc (async/chan (async/sliding-buffer (or (:subscribe-buffer config) 10)))]
+    (let [sourcesc (async/chan (async/sliding-buffer (get config :subscribe-buffer 10)))]
       (swap! channels assoc-in [channel topic] sourcesc)
       (async/go-loop []
         (if-let [{:keys [event topic uri]} (<! sourcesc)]
