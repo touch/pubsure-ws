@@ -1,6 +1,6 @@
-(ns eventure-ws.reader
+(ns pubsure-ws.reader
   "A directory service reader supporting websockets and http requests."
-  (:require [eventure.core :as api]
+  (:require [pubsure.core :as api]
             [org.httpkit.server :as http]
             [clojure.core.async :as async]
             [clojure.string :refer (upper-case lower-case split)]))
