@@ -21,7 +21,7 @@ How should client connect.
 ### Starting and stopping
 
 1. Create a `DirectoryReader` implementation (for example using [pubsure-zk](#))
-2. Call `(def s (pubsure-ws.reader/start-server directory-reader :port 8891 :subscribe-buffer 100))`, where the `:port` and `:subscribe-buffer` options are optional. The values shown are the defaults. The port is where the server will bind to. The subscribe-buffer is the size of the [sliding buffer](#) of the core.async channel used for receiving source updates from the `DirectoryReader`.
+2. Call `(def s (pubsure-ws.reader/start-server directory-reader :port 8091 :subscribe-buffer 100))`, where the `:port` and `:subscribe-buffer` options are optional. The values shown are the defaults. The port is where the server will bind to. The subscribe-buffer is the size of the [sliding buffer](#) of the core.async channel used for receiving source updates from the `DirectoryReader`.
 3. Call `(pubsure-ws.reader/stop-server s)` to stop the server.
 
 ### Usage
@@ -59,7 +59,7 @@ A client can subscribe to multiple topics. Source updates sent back to the clien
  "data": {"topic": <topic>, "uri": <uri>}}
 ```
 
-The `<event>` value is either `"joined"` or `"left"`, and the `<uri>` value is a string holding the URI. Note that theoretically, some updates from the `DirectoryReader` might get lost on slow connections, in case these updates are happening in one big burst and this burst exceeds the `:subscribe-buffer` size (see above). 
+The `<event>` value is either `"joined"` or `"left"`, and the `<uri>` value is a string holding the URI. Note that theoretically, some updates from the `DirectoryReader` might get lost on slow connections, in case these updates are happening in one big burst and this burst exceeds0the `:subscribe-buffer` size (see above). 
 
 To unsubscribe, send a JSON request in the following form:
 
