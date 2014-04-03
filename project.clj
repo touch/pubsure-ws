@@ -6,4 +6,5 @@
   :dependencies [[org.clojure/clojure "1.5.1"]
                  [pubsure/pubsure-core "0.1.0-SNAPSHOT"]
                  [org.clojure/core.async "0.1.278.0-76b25b-alpha"]
-                 [http-kit "2.1.18"]])
+                 [http-kit "2.1.18"]
+                 [cheshire "5.3.1"]])
