@@ -1,128 +1,117 @@
 (ns pubsure-ws.source
+  "A Source implementation that uses Websockets for communication. The
+  publish function takes Strings, byte-arrays, InputStreams and
+  ByteBuffers as message format. The published messages are wrapped
+  with JSON (using the WAMP spec), so the latter three are encoded as
+  Base64 strings."
   (:require [pubsure.core :as api :refer (Source)]
             [pubsure.utils :refer (conj-set)]
             [org.httpkit.server :as http]
-            [clojure.string :refer (split)])
+            [clj-wamp.server :as wamp]
+            [clojure.string :refer (split)]
+            [cheshire.core :as json]
+            [cheshire.generate :as generate]
+            [ring.middleware.params :as params])
   (:import [java.net InetAddress URI]))
 
 
-;;; Websocket handling.
+;;; Fix wamp/map-key-or-prefix. Quicker, and supports catch-all.
 
-(defn- unsubscribe
-  [{:keys [channels topics config] :as source} channel topic]
-  (when (dosync
-          (when (get-in @channels [channel topic])
-            (alter topics update-in [topic] disj channel)
-            (alter channels update-in [channel] disj topic))))
-  (http/send! channel (str "UNSUB " topic))
-  (when (and (= 0 (count (get @channels channel))) (:close-on-nosubs? config))
-    (http/close channel)))
+(defn- map-key-or-prefix
+  [m k]
+  (or (m k)
+      (some (fn [[mk mv]]
+              (and (string? mk)
+                   (= \* (last mk))
+                   (.startsWith k (subs mk 0 (dec (count mk))))
+                   mv))
+            m)))
 
-
-(defn- subscribe
-  [{:keys [channels topics cache] :as source} channel topic last]
-  (when-not (get-in @channels [channel topic])
-    (let [cmessages (get @cache topic)]
-      (when (and (seq cmessages) (< 0 last))
-        (http/send! channel (str "CACHE " topic))
-        (doseq [msg (take last (reverse cmessages))] (http/send! channel (str topic ":" msg)))))
-    (if (dosync
-          (when (get @topics topic)
-            (alter topics update-in [topic] conj channel)
-            (alter channels update-in [channel] conj-set topic)))
-      (http/send! channel (str "SUB " topic))
-      (unsubscribe source channel topic))))
+(alter-var-root #'wamp/map-key-or-prefix (constantly map-key-or-prefix))
 
 
-(defn- handle-data
-  [source channel data]
-  (let [[command & args] (split data #"\s+")]
-    (case command
-      "SUB" (let [[topic last] args
-                  last (try (Long/parseLong last) (catch NumberFormatException ex))]
-              (if (and topic last)
-                (subscribe source channel topic last)
-                (http/send! channel "Illegal command" true)))
-      "UNSUB" (let [[topic] args]
-                (if topic
-                  (unsubscribe source channel topic)
-                  (http/send! channel "Illegal command" true)))
-      (http/send! channel "Illegal command" true))))
+;;; Set up JSON encoding for binary data.
+
+;;---FIXME
+(generate/add-encoder (Class/forName "[B") nil)
 
 
-(defn- handle-close
-  [{:keys [channels] :as source} channel status]
-  (dosync (alter channels dissoc channel)))
+;;; WAMP application.
 
+(defn- send-cache
+  [{:keys [cache] :as source} request sess-id topic]
+  (prn "SENDING CACHE" request sess-id topic)
+  (when-let [nr (Long/parseLong (get-in request [:params "cache"]))]
+    (doseq [message (reverse (take nr (get @cache topic)))]
+      (wamp/emit-event! topic message sess-id)))
+  ;;---TODO Determine whether this topic is actually published by this
+  ;;        source, and unsubscribe when its not?
+  )
 
-;;; HTTP-kit app
 
 (defn- make-app
   [source]
-  (fn [request]
-    (http/with-channel request channel
-      (if (http/websocket? channel)
-        (do (prn request) ;---TODO Support subscribing via path/params.
-            (http/on-receive channel (partial handle-data source channel))
-            (http/on-close channel (partial handle-close source channel)))
-        (http/send! channel {:status 400 :body "Server only supports websockets"})))))
+  (-> (fn [request]
+        (http/with-channel request channel
+          (if (http/websocket? channel)
+            (let [sess-id (wamp/http-kit-handler
+                           channel
+                           {:on-auth {:allow-anon? true ;---TODO Support authentication?
+                                      :timeout 0}
+                            :on-subscribe {"*" true
+                                           :on-after (partial send-cache source request)}})
+                  topic (subs (:uri request) 1)]
+              (when (seq topic)
+                (wamp/topic-subscribe topic sess-id)
+                (send-cache source request sess-id topic)))
+            (http/send! channel {:status 400 :body "Server only supports websockets"}))))
+      params/wrap-params))
 
 
-(defn- ensure-topic
-  [{:keys [dirwriter topics uri] :as source} topic]
-  (when-not (get @topics topic)
-    (dosync (alter topics assoc topic #{}))
-    (api/add-source dirwriter topic uri)))
+;;; Source implementation.
 
-
-;; cache = (atom {"topic" (msg msg msg)})
-;; topics = (ref {"topic" #{chan chan chan}})
-;; channels = (ref {chan #{"topic" "topic" "topic"}})
+;; topics = (ref #{"topic"})
+;; cache = (atom {"topic" (msg-3 msg-2 msg-1)})
 ;; open = (atom boolean)
-;; config = {:cache-size long, :close-on-nosubs? boolean}
-(defrecord WebSocketSource [dirwriter uri stop-fn cache topics channels open config]
+;; config = {:cache-size long}
+(defrecord WebsocketSource [dirwriter stop-fn open topics cache uri config]
   Source
   (publish [this topic message]
     (when @open
-      (ensure-topic this topic)
-      (let [msg (str topic ":" message)]
-        (doseq [channel (get @topics topic)]
-          (when-not (http/send! channel msg)
-            (dosync (alter topics update-in [topic] disj channel)))))
+      (when (dosync
+              (when-not (get @topics topic)
+                (alter topics conj topic)))
+        (when @open (api/add-source dirwriter topic uri)))
+      (wamp/send-event! topic message)
       (swap! cache update-in [topic]
              (fn [c] (take (config :cache-size) (conj c message))))))
 
   (done [this topic]
-    (when-let [subs (get @topics topic)]
-      (when @open
+    (when @open
+      (when (dosync (when (get @topics topic)
+                      (alter topics disj topic)))
         (api/remove-source dirwriter topic uri)
-        (dosync (alter topics dissoc topic))
-        (doseq [channel subs]
-          (unsubscribe this channel topic))))))
+        ;;---TODO: Send a "done" somehow to the subscribers, and unsubscribe them?
+        ))))
 
 
 (defn start-source
-  [dirwriter & {:keys [port cache-size hostname close-on-nosubs?]
-                :or {port 8090
-                     cache-size 0
-                     hostname (. (InetAddress/getLocalHost) getHostName)
-                     close-on-nosubs? true}}]
+  [directory-writer & {:keys [port hostname cache-size]
+                       :or {port 8090
+                            cache-size 0
+                            hostname (. (InetAddress/getLocalHost) getHostName)}}]
   (let [uri (URI. (str "ws://" hostname ":" port))
         stop-fn (atom nil)
-        open (atom false)
-        source (WebSocketSource. dirwriter uri stop-fn (atom {}) (ref {}) (ref {}) open
-                                 {:cache-size cache-size :close-on-nosubs? close-on-nosubs?})]
-    (reset! stop-fn (http/run-source (make-app source) {:port port}))
-    (reset! open true)
+        source (WebsocketSource. directory-writer stop-fn (atom true) (ref #{}) (atom {}) uri
+                                 {:cache-size cache-size})]
+    (reset! stop-fn (http/run-server (make-app source) {:port port}))
     source))
 
 
 (defn stop-source
-  [{:keys [dirwriter uri stop-fn open topics] :as source}]
-  (reset! open false)
-  (doseq [[topic subs] @topics]
-    (api/remove-source dirwriter topic uri) ;---TODO Add batch operation to DirectoryWriter?
-    (dosync (alter topics dissoc topic))
-    (doseq [channel subs]
-      (unsubscribe source channel topic)))
-  (@stop-fn :timeout 100))
+  [{:keys [stop-fn open uri dirwriter topics] :as source}]
+  (when @open
+    (reset! open false)
+    (@stop-fn :timeout 100)
+    (dosync (doseq [topic @topics]
+              (api/remove-source dirwriter topic uri)))))
