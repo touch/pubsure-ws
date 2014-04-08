@@ -30,14 +30,13 @@
 (defn- send-summary
   "Sends a summary of the published messages, built by the optional
   summary function given at source creation."
-  [{:keys [summaries] :as source} topic]
-  (let [summary (get @summaries topic :no-summary)]
-    (if-not (= summary :no-summary)
-      {:result summary}
-      {:error {:uri topic
-               :message "No summary"
-               :description (str "The '" topic "' topic does not have a summary.")
-               :kill false}})))
+  [{:keys [summary-fn summaries] :as source} topic]
+  (if summary-fn
+    {:result (get @summaries topic)}
+    {:error {:uri topic
+             :message "No summary"
+             :description (str "This source does not use summaries.")
+             :kill false}}))
 
 
 (defn- make-app
