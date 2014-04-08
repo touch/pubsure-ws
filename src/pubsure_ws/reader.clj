@@ -5,7 +5,9 @@
             [clojure.core.async :as async]
             [clojure.string :refer (upper-case lower-case split)]
             [cheshire.core :as json]
-            [cheshire.generate :as json-enc])
+            [cheshire.generate :as json-enc]
+            [clj-wamp.server :as wamp]
+            [pubsure-ws.temp-fix])
   (:import [java.net URI]))
 
 
@@ -15,18 +17,6 @@
 (json-enc/add-encoder URI json-enc/encode-str)
 
 
-(defn send-success
-  "Send a success message to the client."
-  [channel msg]
-  (http/send! channel (json/generate-string {:response :success :message msg})))
-
-
-(defn send-error
-  "Send an error message to the client, and optionally close the connection afterwards."
-  [channel msg close?]
-  (http/send! channel (json/generate-string {:response :error :message msg}) close?))
-
-
 ;;; Exposing a DirectoryReader as a Websocket service.
 
 ;; channels = (atom {http.channel {"topic" async.chan}})
@@ -34,59 +24,36 @@
 
 
 (defn- unsubscribe
-  "Unsubscribe the given channel from the given topic."
-  [{:keys [dirreader channels] :as state} channel topic]
-  (when-let [sourcesc (get-in @channels [channel topic])]
-    (swap! channels update-in [channel] dissoc topic)
+  "Unsubscribe the given session from the given topic."
+  [{:keys [dirreader channels] :as state} sess-id topic]
+  (when-let [sourcesc (get-in @channels [sess-id topic])]
+    (swap! channels update-in [sess-id] dissoc topic)
     (api/unwatch-sources dirreader topic sourcesc)
-    (async/close! sourcesc)
-    (send-success channel {:unsubscribe topic})))
+    (async/close! sourcesc)))
 
 
 (defn- subscribe
-  "Subscribe the given channel to the given topic, using the supplied
-  init parameter. This starts a go-loop, reading from a sliding-buffer channel, "
-  [{:keys [dirreader config channels open] :as state} channel topic init]
-  (when-not (get-in @channels [channel topic])
+  "Subscribe the given session to the given topic. This starts a
+  go-loop, reading from a sliding-buffer channel."
+  [{:keys [dirreader config channels open] :as state} sess-id topic]
+  (prn 'SUB? channels sess-id topic)
+  (when-not (get-in @channels [sess-id topic])
     (let [sourcesc (async/chan (async/sliding-buffer (get config :subscribe-buffer 100)))]
-      (swap! channels assoc-in [channel topic] sourcesc)
+      (swap! channels assoc-in [sess-id topic] sourcesc)
       (async/go-loop []
-        (if-let [{:keys [event topic uri]} (<! sourcesc)]
-          (do (http/send! channel (json/generate-string {:event event
-                                                         :data {:topic topic :uri uri}}) )
+        (if-let [event (<! sourcesc)]
+          (do (wamp/emit-event! topic event sess-id)
               (recur))
-          (unsubscribe state channel topic)))
-      (send-success channel {:subscribe topic})
-      (api/watch-sources dirreader topic (keyword init) sourcesc))))
-
-
-(defn- handle-data
-  "Handles data coming in from the client. In tries to parse the data
-  as JSON and handle accordingly."
-  [{:keys [open] :as state} channel data]
-  (if @open
-    (let [{:strs [action data] :as request} (json/parse-string data)
-          {:strs [topic init]} data]
-      (case action
-        "subscribe"
-        (if (and topic (#{"last" "all" "random"} init))
-          (subscribe state channel topic init)
-          (send-error channel (str "Missing topic and/or init parameter for: " data) false))
-
-        "unsubscribe"
-        (if topic
-          (unsubscribe state channel topic)
-          (send-error channel (str "Missing topic parameter for: " data) false))
-        (send-error channel (str "Illegal command: " data) true)))
-    (send-error channel (str "Server is closing") false)))
+          (unsubscribe state sess-id topic)))
+      (api/watch-sources dirreader topic :none sourcesc))))
 
 
 (defn- handle-close
   "Handles a closed connection. This will automatically unsubscribe
   the channel from all topics in the DirectoryReader."
-  [{:keys [channels] :as state} channel status]
-  (doseq [[topic _] (get @channels channel)]
-    (unsubscribe state channel topic)))
+  [{:keys [channels] :as state} sess-id status]
+  (doseq [[topic _] (get @channels sess-id)]
+    (unsubscribe state sess-id topic)))
 
 
 (defn- make-app
@@ -99,13 +66,20 @@
       (let [topic (subs (:uri request) 1)]
         (http/with-channel request channel
           (if (http/websocket? channel)
-            (do (http/on-receive channel (partial handle-data state channel))
-                (http/on-close channel (partial handle-close state channel))
-                (when (seq topic) (subscribe state channel topic "last")))
-            (let [topic (subs (:uri request) 1)]
-              (if (seq topic)
-                (http/send! channel (json/generate-string (api/sources dirreader topic)))
-                (http/send! channel {:status 400 :body "Illegal request"}))))))
+            (let [sess-id (wamp/http-kit-handler
+                           channel
+                           {:on-auth {:allow-anon? true ;---TODO Support authentication?
+                                      :timeout 0}
+                            :on-subscribe {"*" true
+                                           :on-after (partial subscribe state)}
+                            :on-unsubscribe (partial unsubscribe state)
+                            :on-close (partial handle-close state)})]
+              (when (seq topic)
+                (wamp/topic-subscribe topic sess-id)
+                (subscribe state sess-id topic)))
+            (if (seq topic)
+              (http/send! channel (json/generate-string (api/sources dirreader topic)))
+              (http/send! channel {:status 400 :body "Illegal request"})))))
       {:status 503 :body "Server is closing"})))
 
 
@@ -133,9 +107,4 @@
   the server and unsubscribe every connection in the DirectoryReader."
   [{:keys [stop-fn open channels] :as state}]
   (reset! open false)
-  (doseq [[channel topics] @channels]
-    (doseq [[topic chan] topics]
-      (unsubscribe state channel topic)
-      (async/close! chan))
-    (http/close channel))
   (@stop-fn :timeout 100))

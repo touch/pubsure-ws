@@ -7,24 +7,8 @@
             [clj-wamp.server :as wamp]
             [clojure.string :refer (split)]
             [cheshire.core :as json]
-            [cheshire.generate :as generate]
-            [ring.middleware.params :as params])
+            [pubsure-ws.temp-fix])
   (:import [java.net InetAddress URI]))
-
-
-;;; Fix wamp/map-key-or-prefix. Supports catch-all. Pull request posted.
-
-(defn- map-key-or-prefix
-  [m k]
-  (or (m k)
-      (some (fn [[mk mv]]
-              (and (string? mk)
-                   (= \* (last mk))
-                   (.startsWith k (subs mk 0 (dec (count mk))))
-                   mv))
-            m)))
-
-(alter-var-root #'wamp/map-key-or-prefix (constantly map-key-or-prefix))
 
 
 ;;; WAMP application.
@@ -60,21 +44,20 @@
   "Creates a ring app, handling the requests and data using WAMP and
   the given source state record."
   [source]
-  (-> (fn [request]
-        (http/with-channel request channel
-          (if (http/websocket? channel)
-            (let [sess-id (wamp/http-kit-handler
-                           channel
-                           {:on-auth {:allow-anon? true ;---TODO Support authentication?
-                                      :timeout 0}
-                            :on-subscribe {"*" true}
-                            :on-call {"cache" (partial send-cache source)
-                                      "summary" (partial send-summary source)}})
-                  topic (subs (:uri request) 1)]
-              (when (seq topic)
-                (wamp/topic-subscribe topic sess-id)))
-            (http/send! channel {:status 400 :body "Server only supports websockets"}))))
-      params/wrap-params))
+  (fn [request]
+    (http/with-channel request channel
+      (if (http/websocket? channel)
+        (let [sess-id (wamp/http-kit-handler
+                       channel
+                       {:on-auth {:allow-anon? true ;---TODO Support authentication?
+                                  :timeout 0}
+                        :on-subscribe {"*" true}
+                        :on-call {"cache" (partial send-cache source)
+                                  "summary" (partial send-summary source)}})
+              topic (subs (:uri request) 1)]
+          (when (seq topic)
+            (wamp/topic-subscribe topic sess-id)))
+        (http/send! channel {:status 400 :body "Server only supports websockets"})))))
 
 
 ;;; Source implementation.

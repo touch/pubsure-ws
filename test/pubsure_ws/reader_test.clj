@@ -18,38 +18,29 @@
         ws (ws/connect "ws://localhost:8091/test-topic"
                        :on-receive (partial async/put! recv))]
 
-    ;; Test automatic subscribe on connect.
-    (is (= "success" (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string
-                         (get "response"))))
+    ;; Get welcome message.
+    (is (= 0 (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string first)))
 
-    ;; Test events.
+    ;; Test automatic subscribe and events.
     (api/add-source dir "test-topic" (URI. "ws://source-1"))
-    (is (= {"event" "joined", "data" {"topic" "test-topic", "uri" "ws://source-1"}}
-           (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string)))
+    (is (= {"event" "joined", "topic" "test-topic", "uri" "ws://source-1"}
+           (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string (nth 2))))
     (api/remove-source dir "test-topic" (URI. "ws://source-1"))
-    (is (= {"event" "left", "data" {"topic" "test-topic", "uri" "ws://source-1"}}
-           (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string)))
+    (is (= {"event" "left", "topic" "test-topic", "uri" "ws://source-1"}
+           (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string (nth 2))))
 
     ;; Test unsubscribe.
-    (ws/send-msg ws (json/generate-string {:action :unsubscribe
-                                           :data {:topic "test-topic"}}))
-    (is (= "success" (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string
-                         (get "response"))))
-
-    ;; Test subscribe error.
-    (ws/send-msg ws (json/generate-string {:action :subscribe
-                                           :data {:topic "test-topic"}}))
-    (is (= "error" (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string
-                       (get "response"))))
+    (ws/send-msg ws (json/generate-string [6 "test-topic"]))
+    (Thread/sleep 500) ; give the server the chance to unsub
+    (api/add-source dir "test-topic" (URI. "ws://source-1"))
+    (is (= nil (-> (async/alts!! [recv (async/timeout 500)]) first)))
 
     ;; Test subscribe.
-    (api/add-source dir "test-topic" (URI. "ws://source-1"))
-    (ws/send-msg ws (json/generate-string {:action :subscribe
-                                           :data {:topic "test-topic" :init :all}}))
-    (is (= "success" (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string
-                         (get "response"))))
-    (is (= {"event" "joined", "data" {"topic" "test-topic", "uri" "ws://source-1"}}
-           (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string)))
+    (ws/send-msg ws (json/generate-string [5 "test-topic"]))
+    (Thread/sleep 500) ; give the server the chance to sub
+    (api/remove-source dir "test-topic" (URI. "ws://source-1"))
+    (is (= {"event" "left", "topic" "test-topic", "uri" "ws://source-1"}
+           (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string (nth 2))))
 
     ;; Done
     (async/close! recv)
