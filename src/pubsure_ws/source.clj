@@ -126,8 +126,11 @@
   :clean-summary-on-done - Whether to clean the summary when `done` is
   called on the Source. Default is false.
 
+  :wrap-fn - A ring request wrapper function, wrapping around the
+  default handler. This can for instance be used for authentication.
+
   Returns the source state record, used for `stop-source`."
-  [directory-writer & {:keys [port hostname cache-size summary-fn]
+  [directory-writer & {:keys [port hostname cache-size summary-fn wrap-fn]
                        :or {port 8090
                             cache-size 0
                             hostname (. (InetAddress/getLocalHost) getHostName)}
@@ -136,8 +139,10 @@
         stop-fn (atom nil)
         config (assoc config :cache-size cache-size)
         source (WebsocketSource. directory-writer stop-fn (atom true) (ref #{}) (atom {}) uri
-                                 config summary-fn (atom {}))]
-    (reset! stop-fn (http/run-server (make-app source) {:port port}))
+                                 config summary-fn (atom {}))
+        app (make-app source)
+        wrapped-app (if wrap-fn (wrap-fn app) app)]
+    (reset! stop-fn (http/run-server wrapped-app {:port port}))
     source))
 
 

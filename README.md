@@ -1,6 +1,6 @@
 # pubsure-ws
 
-A Websocket implementation for the `Source` protocol of [pubsure](#), and separately, a HTTP/Websocket server exposing a `DirectoryReader` implementation. Both use the [WAMP](#) specification for communication. You need to understand this spec, at least on a high level, to use these Pubsure implementations. One can use for example the [Autobahn](http://autobahn.ws/) libraries to "talk" WAMP.
+A Websocket implementation for the `Source` protocol of [pubsure](#), and separately, a HTTP/Websocket server exposing a `DirectoryReader` implementation. Both use the [WAMP v1](#) specification for communication. You need to understand this spec, at least on a high level, to use these Pubsure implementations. One can use for example the [Autobahn](http://autobahn.ws/) libraries to "talk" WAMP.
 
 ## Integration
 
@@ -22,12 +22,13 @@ Add `[pubsure/pubsure-ws "0.1.0-SNAPSHOT"]` to your dependencies in Leiningen.
 * `:clean-cache-on-done` - A boolean indicating whether to clean the cache of messages for a topic, when the `done` function is called for that topic. Default is false.
 * `:summary-fn` - A function that updates a summary value for each topic on every published message. This summary can be retrieved using WAMP RPC (see below). The function takes two arguments; the current summary (which may be nil), and the published message. Default is no function.
 * `:clean-summary-on-done` - A boolean indicating whether to clean the summary for a topic, when the `done` function is called for that topic. Default is false.
+* `:wrap-fn` - A ring wrapper function, which wraps the standard request handling function. This can be used for instance for authentication. Default is no function.
 
 ### Usage
 
 Open a Websocket connection to `ws://<host>:<port>/[topic]`. The `[topic]` part is optional. When supplied, the connection is automatically subscribed to that topic.
 
-In order to be informed of source updates, one needs to send a WAMP subscribe request to the server. A client can subscribe to multiple topics. 
+In order to be informed of source updates, one needs to send a WAMP subscribe request to the server. A client can subscribe to multiple topics.
 
 #### RPC call - `cache`
 
