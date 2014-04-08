@@ -29,21 +29,31 @@
 
 ;;; WAMP application.
 
-;;---TODO: Make sending cache a WAMP RPC call? This way, one can decide for each topic
-;;         when and how much cache one wants to receive.
 (defn- send-cache
-  "Sends cache data for the given topic to the socket identified with
-  `sess-id`. The cache data is availabe in the source state record,
-  and the number of cache items is currently retrieved from the
-  `cache` parameter in the original request."
-  [{:keys [cache] :as source} request sess-id topic]
-  (prn "SENDING CACHE" request sess-id topic)
-  (when-let [nr (Long/parseLong (get-in request [:params "cache"]))]
-    (doseq [message (reverse (take nr (get @cache topic)))]
-      (wamp/emit-event! topic message sess-id)))
-  ;;---TODO Determine whether this topic is actually published by this
-  ;;        source, and unsubscribe when its not?
-  )
+  "Sends cache data for the given topic to the caller. This RPC call
+  function takes three parameters: the topic, the size and whether to
+  receive the cache items as a response or as published messsages. The
+  cache data is availabe in the source state record."
+  [{:keys [cache] :as source} topic size publish?]
+  (let [messages (reverse (take size (get @cache topic)))]
+    (if publish?
+      (do (doseq [message messages]
+            (wamp/emit-event! topic message wamp/*call-sess-id*))
+          {:result (str "published " (count messages) " messages from cache")})
+      {:result messages})))
+
+
+(defn- send-summary
+  "Sends a summary of the published messages, built by the optional
+  summary function given at source creation."
+  [{:keys [summaries] :as source} topic]
+  (let [summary (get @summaries topic :no-summary)]
+    (if-not (= summary :no-summary)
+      {:result summary}
+      {:error {:uri topic
+               :message "No summary"
+               :description (str "The '" topic "' topic does not have a summary.")
+               :kill false}})))
 
 
 (defn- make-app
@@ -57,12 +67,12 @@
                            channel
                            {:on-auth {:allow-anon? true ;---TODO Support authentication?
                                       :timeout 0}
-                            :on-subscribe {"*" true
-                                           :on-after (partial send-cache source request)}})
+                            :on-subscribe {"*" true}
+                            :on-call {"cache" (partial send-cache source)
+                                      "summary" (partial send-summary source)}})
                   topic (subs (:uri request) 1)]
               (when (seq topic)
-                (wamp/topic-subscribe topic sess-id)
-                (send-cache source request sess-id topic)))
+                (wamp/topic-subscribe topic sess-id)))
             (http/send! channel {:status 400 :body "Server only supports websockets"}))))
       params/wrap-params))
 
@@ -72,8 +82,9 @@
 ;; topics = (ref #{"topic"})
 ;; cache = (atom {"topic" (msg-3 msg-2 msg-1)})
 ;; open = (atom boolean)
-;; config = {:cache-size long}
-(defrecord WebsocketSource [dirwriter stop-fn open topics cache uri config]
+;; config = {:cache-size long, :clean-cache-on-done boolean, :clean-summary-on-done boolean}
+;; summaries (atom {"topic", summary})
+(defrecord WebsocketSource [dirwriter stop-fn open topics cache uri config summary-fn summaries]
   Source
   (publish [this topic message]
     (when @open
@@ -83,13 +94,19 @@
         (when @open (api/add-source dirwriter topic uri)))
       (wamp/send-event! topic message)
       (swap! cache update-in [topic]
-             (fn [c] (take (config :cache-size) (conj c message))))))
+             (fn [c] (take (config :cache-size) (conj c message))))
+      (when summary-fn (swap! summaries update-in [topic] summary-fn message))))
 
   (done [this topic]
     (when @open
       (when (dosync (when (get @topics topic)
                       (alter topics disj topic)))
-        (when @open (api/remove-source dirwriter topic uri))
+        (when @open
+          (api/remove-source dirwriter topic uri))
+        (when (:clean-cache-on-done config)
+          (swap! cache dissoc topic))
+        (when (and summary-fn (:clean-summary-on-done config))
+          (swap! summaries dissoc topic))
         ;;---TODO: Send a "done" somehow to the subscribers, and unsubscribe them?
         ))))
 
@@ -110,21 +127,34 @@
   :port - The port number where the server will bind to. Default is
   8090.
 
-  :cache-size - The number of last published messages kept for each
-  topic. Default is 0.
-
   :hostname - The hostname to use in the ws:// URI as registered in
   the directory service. Default is system hostname.
 
+  :cache-size - The number of last published messages kept for each
+  topic. This cache can be received through WAMP RPC. Default is 0.
+
+  :clean-cache-on-done - Whether to clean the cache when `done` is
+  called on the Source. Default is false.
+
+  :summary-fn - An optional function which builds up a summary of the
+  messages published for each topic, which can be received through
+  WAMP RPC. The function takes the current summary (which may be nil)
+  and the published message as its parameters.
+
+  :clean-summary-on-done - Whether to clean the summary when `done` is
+  called on the Source. Default is false.
+
   Returns the source state record, used for `stop-source`."
-  [directory-writer & {:keys [port hostname cache-size]
+  [directory-writer & {:keys [port hostname cache-size summary-fn]
                        :or {port 8090
                             cache-size 0
-                            hostname (. (InetAddress/getLocalHost) getHostName)}}]
+                            hostname (. (InetAddress/getLocalHost) getHostName)}
+                       :as config}]
   (let [uri (URI. (str "ws://" hostname ":" port))
         stop-fn (atom nil)
+        config (assoc config :cache-size cache-size)
         source (WebsocketSource. directory-writer stop-fn (atom true) (ref #{}) (atom {}) uri
-                                 {:cache-size cache-size})]
+                                 config summary-fn (atom {}))]
     (reset! stop-fn (http/run-server (make-app source) {:port port}))
     source))
 
