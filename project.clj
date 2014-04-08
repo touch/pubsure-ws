@@ -9,5 +9,6 @@
                  [http-kit "2.1.18"]
                  [clj-wamp "1.0.0"]
                  [cheshire "5.3.1"]
-                 [ring/ring-core "1.2.2"]]
+                 [ring/ring-core "1.2.2"]
+                 [org.clojure/data.codec "0.1.0"]]
   :profiles {:test {:dependencies [[stylefruits/gniazdo "0.1.0"]]}})

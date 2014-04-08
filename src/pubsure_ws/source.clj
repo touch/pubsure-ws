@@ -1,9 +1,6 @@
 (ns pubsure-ws.source
   "A Source implementation that uses Websockets for communication. The
-  publish function takes Strings, byte-arrays, InputStreams and
-  ByteBuffers as message format. The published messages are wrapped
-  with JSON (using the WAMP spec), so the latter three are encoded as
-  Base64 strings."
+  publish function takes whatever cheshire can encode as JSON."
   (:require [pubsure.core :as api :refer (Source)]
             [pubsure.utils :refer (conj-set)]
             [org.httpkit.server :as http]
@@ -15,7 +12,7 @@
   (:import [java.net InetAddress URI]))
 
 
-;;; Fix wamp/map-key-or-prefix. Quicker, and supports catch-all.
+;;; Fix wamp/map-key-or-prefix. Supports catch-all. Pull request posted.
 
 (defn- map-key-or-prefix
   [m k]
@@ -30,15 +27,15 @@
 (alter-var-root #'wamp/map-key-or-prefix (constantly map-key-or-prefix))
 
 
-;;; Set up JSON encoding for binary data.
-
-;;---FIXME
-(generate/add-encoder (Class/forName "[B") nil)
-
-
 ;;; WAMP application.
 
+;;---TODO: Make sending cache a WAMP RPC call? This way, one can decide for each topic
+;;         when and how much cache one wants to receive.
 (defn- send-cache
+  "Sends cache data for the given topic to the socket identified with
+  `sess-id`. The cache data is availabe in the source state record,
+  and the number of cache items is currently retrieved from the
+  `cache` parameter in the original request."
   [{:keys [cache] :as source} request sess-id topic]
   (prn "SENDING CACHE" request sess-id topic)
   (when-let [nr (Long/parseLong (get-in request [:params "cache"]))]
@@ -50,6 +47,8 @@
 
 
 (defn- make-app
+  "Creates a ring app, handling the requests and data using WAMP and
+  the given source state record."
   [source]
   (-> (fn [request]
         (http/with-channel request channel
@@ -90,12 +89,34 @@
     (when @open
       (when (dosync (when (get @topics topic)
                       (alter topics disj topic)))
-        (api/remove-source dirwriter topic uri)
+        (when @open (api/remove-source dirwriter topic uri))
         ;;---TODO: Send a "done" somehow to the subscribers, and unsubscribe them?
         ))))
 
 
 (defn start-source
+  "Given a DirectoryWriter implementation, this starts a Source that
+  opens a Websocket server, talking the WAMP spec. The URI to connect
+  to this source will be in the form of \"ws://<hostname>\".
+  Optionally, one can provide a path when connecting, which points to
+  a topic one whishes to subscribe to immediatly, e.g.
+  \"ws://<hostname>/<topic>\". Furthermore, one can supply a parameter
+  called \"cache\" (either as a query parameter or header parameter),
+  which indicates the number of cache items one whishes to receive
+  when subscribing to a topic.
+
+  The following options are supported for this function:
+
+  :port - The port number where the server will bind to. Default is
+  8090.
+
+  :cache-size - The number of last published messages kept for each
+  topic. Default is 0.
+
+  :hostname - The hostname to use in the ws:// URI as registered in
+  the directory service. Default is system hostname.
+
+  Returns the source state record, used for `stop-source`."
   [directory-writer & {:keys [port hostname cache-size]
                        :or {port 8090
                             cache-size 0
@@ -109,6 +130,9 @@
 
 
 (defn stop-source
+  "Given the return value of `start-source`, this stops the Websocket
+  server and removes every topic for this source from the directory
+  service."
   [{:keys [stop-fn open uri dirwriter topics] :as source}]
   (when @open
     (reset! open false)
