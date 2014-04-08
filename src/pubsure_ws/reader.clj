@@ -19,7 +19,7 @@
 
 ;;; Exposing a DirectoryReader as a Websocket service.
 
-;; channels = (atom {http.channel {"topic" async.chan}})
+;; channels = (atom {"sess-id" {"topic" async.chan}})
 (defrecord State [dirreader config channels stop-fn open])
 
 
@@ -36,13 +36,12 @@
   "Subscribe the given session to the given topic. This starts a
   go-loop, reading from a sliding-buffer channel."
   [{:keys [dirreader config channels open] :as state} sess-id topic]
-  (prn 'SUB? channels sess-id topic)
-  (when-not (get-in @channels [sess-id topic])
+  (when (and @open (not (get-in @channels [sess-id topic])))
     (let [sourcesc (async/chan (async/sliding-buffer (get config :subscribe-buffer 100)))]
       (swap! channels assoc-in [sess-id topic] sourcesc)
       (async/go-loop []
         (if-let [event (<! sourcesc)]
-          (do (wamp/emit-event! topic event sess-id)
+          (do (wamp/emit-event! topic (dissoc event :topic) sess-id)
               (recur))
           (unsubscribe state sess-id topic)))
       (api/watch-sources dirreader topic :none sourcesc))))
@@ -54,6 +53,22 @@
   [{:keys [channels] :as state} sess-id status]
   (doseq [[topic _] (get @channels sess-id)]
     (unsubscribe state sess-id topic)))
+
+
+(defn- send-sources
+  "Sends the currently known sources to the caller."
+  [{:keys [dirreader open] :as state} topic publish?]
+  (if @open
+    (let [sources (api/sources dirreader topic)]
+      (if publish?
+        (do (doseq [source sources]
+              (wamp/emit-event! topic {:event :joined, :uri source} wamp/*call-sess-id*))
+            {:result (str "Published " (count sources) " sources as events.")})
+        {:result sources}))
+    {:error {:uri topic
+             :message "Server closing"
+             :description (str "The server is closing.")
+             :kill false}}))
 
 
 (defn- make-app
@@ -73,7 +88,8 @@
                             :on-subscribe {"*" true
                                            :on-after (partial subscribe state)}
                             :on-unsubscribe (partial unsubscribe state)
-                            :on-close (partial handle-close state)})]
+                            :on-close (partial handle-close state)
+                            :on-call {"sources" (partial send-sources state)}})]
               (when (seq topic)
                 (wamp/topic-subscribe topic sess-id)
                 (subscribe state sess-id topic)))
@@ -107,4 +123,7 @@
   the server and unsubscribe every connection in the DirectoryReader."
   [{:keys [stop-fn open channels] :as state}]
   (reset! open false)
+  (doseq [[sess-id topic-chans] @channels
+          [topic _] topic-chans]
+    (unsubscribe state sess-id topic))
   (@stop-fn :timeout 100))
