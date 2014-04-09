@@ -11,4 +11,18 @@
                  [cheshire "5.3.1"]
                  [ring/ring-core "1.2.2"]
                  [org.clojure/data.codec "0.1.0"]]
-  :profiles {:test {:dependencies [[stylefruits/gniazdo "0.1.0"]]}})
+  :profiles {:test {:dependencies [[stylefruits/gniazdo "0.1.0"]]}}
+  :pom-plugins [[com.theoryinpractise/clojure-maven-plugin "1.3.15"
+                 {:extensions "true"
+                  :executions ([:execution
+                                [:id "clojure-compile"]
+                                [:phase "compile"]
+                                [:configuration
+                                 [:temporaryOutputDirectory "true"]
+                                 [:sourceDirectories [:sourceDirectory "src"]]]
+                                [:goals [:goal "compile"]]]
+                                 [:execution
+                                  [:id "clojure-test"]
+                                  [:phase "test"]
+                                  [:goals [:goal "test"]]])}]]
+  :pom-addition [:properties [:project.build.sourceEncoding "UTF-8"]])
