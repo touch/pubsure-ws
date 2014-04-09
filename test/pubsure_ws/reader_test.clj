@@ -23,10 +23,10 @@
 
     ;; Test automatic subscribe and events.
     (api/add-source dir "test-topic" (URI. "ws://source-1"))
-    (is (= {"event" "joined", "topic" "test-topic", "uri" "ws://source-1"}
+    (is (= {"event" "joined", "uri" "ws://source-1"}
            (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string (nth 2))))
     (api/remove-source dir "test-topic" (URI. "ws://source-1"))
-    (is (= {"event" "left", "topic" "test-topic", "uri" "ws://source-1"}
+    (is (= {"event" "left", "uri" "ws://source-1"}
            (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string (nth 2))))
 
     ;; Test unsubscribe.
@@ -39,7 +39,7 @@
     (ws/send-msg ws (json/generate-string [5 "test-topic"]))
     (Thread/sleep 500) ; give the server the chance to sub
     (api/remove-source dir "test-topic" (URI. "ws://source-1"))
-    (is (= {"event" "left", "topic" "test-topic", "uri" "ws://source-1"}
+    (is (= {"event" "left", "uri" "ws://source-1"}
            (-> (async/alts!! [recv (async/timeout 500)]) first json/parse-string (nth 2))))
 
     ;; Done
