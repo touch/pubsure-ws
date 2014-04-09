@@ -1,0 +1,24 @@
+<html>
+  <head>
+    <script src="http://code.jquery.com/jquery-2.1.0.js"></script>
+    <script src="http://autobahn.s3.amazonaws.com/js/autobahn.min.js"></script>
+    <script src="client.js"></script>
+  </head>
+  <body onload="initialise()" bgcolor="#dddddd">
+    Reader host: <input type="text" id="reader" value="ws://localhost:8091">
+    <input type="button" id="connect" value="connect">
+    <input type="button" id="disconnect" value="disconnect">
+    <br>
+    Topic: <input type="text" id="topic" value="test-topic">
+    <input type="button" id="sub" value="subscribe">
+    <input type="button" id="unsub" value="unsubscribe">
+    <hr>
+    Reader events: <input type="button" id="readerclear" value="clear">
+    <br>
+    <textarea id="readerlog" rows="20" cols="200"></textarea>
+    <hr>
+    Topic events: <input type="button" id="topicclear" value="clear">
+    <br>
+    <textarea id="topiclog" rows="40" cols="200"></textarea>
+  </body>
+</html>
