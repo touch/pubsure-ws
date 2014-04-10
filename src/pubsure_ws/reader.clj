@@ -71,7 +71,7 @@
              :kill false}}))
 
 
-(defn- make-app
+(defn- make-app*
   "Creates a ring app, using the State record to keep track of
   channels and subscriptions. The app accepts Websocket connections
   and HTTP requests."
@@ -99,6 +99,23 @@
       {:status 503 :body "Server is closing"})))
 
 
+(defn make-app
+  "Creates a http-kit ring app, for use in an existing http-kit
+  server. The following options are supported:
+
+  :subscribe-buffer - The size of of the sliding buffer size used for
+  buffering incoming source updates from the DirectoryReader. Default
+  is 100.
+
+  The returned value is a vector of two items. The first can be used
+  for the `stop-app` function, and the second is the ring app
+  function."
+  [directory-reader & {:keys [subscribe-buffer] :as config}]
+  (let [state (State. directory-reader config (atom {}) (atom nil) (atom true))
+        app (make-app* state)]
+    [state app]))
+
+
 (defn start-server
   "Starts a Websocket-supporting server, handling subscriptions using
   the supplied DirectoryReader implementation. The following options
@@ -112,18 +129,25 @@
 
   The returned value can be used for the `stop-server` function."
   [directory-reader & {:keys [port subscribe-buffer] :or {port 8091} :as config}]
-  (let [stop-fn (atom nil)
-        state (State. directory-reader config (atom {}) stop-fn (atom true))]
-    (reset! stop-fn (http/run-server (make-app state) {:port port}))
+  (let [[state app] (apply make-app directory-reader (flatten config))]
+    (reset! (:stop-fn state) (http/run-server app {:port port}))
     state))
+
+
+(defn stop-app
+  "Given the first item in the return value of `make-app` function,
+  this function will unwatch the current open watches to the
+  DirectoryReader. The app should not and cannot be used afterwards."
+  [{:keys [open channels] :as state}]
+  (reset! open false)
+  (doseq [[sess-id topic-chans] @channels
+          [topic _] topic-chans]
+    (unsubscribe state sess-id topic)))
 
 
 (defn stop-server
   "Given the return value of `start-server`, this function will stop
-  the server and unsubscribe every connection in the DirectoryReader."
-  [{:keys [stop-fn open channels] :as state}]
-  (reset! open false)
-  (doseq [[sess-id topic-chans] @channels
-          [topic _] topic-chans]
-    (unsubscribe state sess-id topic))
+  the server and unsubscribe every watch in the DirectoryReader."
+  [{:keys [stop-fn] :as state}]
+  (stop-app state)
   (@stop-fn :timeout 100))
