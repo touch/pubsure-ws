@@ -53,6 +53,7 @@ function readerEvent(topic, event) {
             connection = new ab.Session(event.uri,
                                         function() {
                                             readerLog("Connected to publisher: " + event.uri);
+                                            // get 'old' subscriptions here and resubscribe?
                                             publishers[event.uri] = {"_connection":  this};
                                             readerLog("Subscribing to topic '" + topic +"' at: "+ event.uri);
                                             this.subscribe(topic, publishEvent);
@@ -74,6 +75,7 @@ function readerEvent(topic, event) {
         readerLog("The publisher for '" + topic + "' at " + event.uri + " has left.");
         var connection = safeGet(publishers[event.uri], "_connection");
         if (connection != null && connection != undefined &&  connection._websocket_connected == true) {
+            // check if actually subscribed
             connection.unsubscribe(topic);
             readerLog("Unsubscribed from topic '" + topic + "' at: "+ event.uri);
         } else {

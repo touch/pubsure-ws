@@ -1,6 +1,6 @@
-(defproject pubsure-ws "0.1.0-SNAPSHOT"
-  :description "FIXME: write description"
-  :url "http://example.com/FIXME"
+(defproject pubsure/pubsure-ws "0.1.0-SNAPSHOT"
+  :description "WAMP over Websocket implementation for pubsure."
+  :url "https://github.com/touch/pubsure-ws"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.5.1"]
