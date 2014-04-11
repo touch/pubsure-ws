@@ -7,9 +7,11 @@
             [clj-wamp.server :as wamp]
             [clojure.string :refer (split)]
             [cheshire.core :as json]
-            [pubsure-ws.temp-fix])
-  (:import [java.net InetAddress URI]))
-
+            [pubsure-ws.temp-fix]
+            [taoensso.timbre :as timbre])
+  (:import [java.net InetAddress URI]
+           [java.util UUID]))
+(timbre/refer-timbre)
 
 ;;; WAMP application.
 
@@ -19,30 +21,40 @@
   receive the cache items as a response or as published messsages. The
   cache data is availabe in the source state record."
   [{:keys [cache] :as source} topic size publish?]
-  (let [messages (reverse (take size (get @cache topic)))]
+  (debug "Requested to send " size "items from cache for" topic "to" wamp/*call-sess-id*)
+  (let [messages (reverse (take size (get @cache topic)))
+        cnt (count messages)]
     (if publish?
-      (do (doseq [message messages]
+      (do (debug "Sending" cnt "cached message for" topic "to" wamp/*call-sess-id* "as events.")
+          (doseq [message messages]
             (wamp/emit-event! topic message wamp/*call-sess-id*))
-          {:result (str "published " (count messages) " messages from cache")})
-      {:result messages})))
+          {:result (str "published " cnt " messages from cache")})
+      (do (debug "Sending" cnt "cached message for" topic "to" wamp/*call-sess-id* "as reply.")
+          {:result messages}))))
 
 
 (defn- send-summary
   "Sends a summary of the published messages, built by the optional
   summary function given at source creation."
   [{:keys [summary-fn summaries] :as source} topic]
+  (debug "Requested to send summary of" topic "to" wamp/*call-sess-id*)
   (if summary-fn
-    {:result (get @summaries topic)}
-    {:error {:uri topic
-             :message "No summary"
-             :description (str "This source does not use summaries.")
-             :kill false}}))
+    (let [summary (get @summaries topic)]
+      (debug "Sending summary of" topic "to" wamp/*call-sess-id*)
+      (trace "Summary is" summary)
+      {:result summary})
+    (do (debug "Sending no summary error to" wamp/*call-sess-id*)
+        {:error {:uri topic
+                 :message "No summary"
+                 :description (str "This source does not use summaries.")
+                 :kill false}})))
 
 
 (defn- make-app
   "Creates a ring app, handling the requests and data using WAMP and
   the given source state record."
   [source]
+  (debug "Creating source app using state" source)
   (fn [request]
     (http/with-channel request channel
       (if (http/websocket? channel)
@@ -50,11 +62,15 @@
                        channel
                        {:on-auth {:allow-anon? true ;---TODO Support authentication?
                                   :timeout 0}
-                        :on-subscribe {"*" true}
+                        :on-subscribe {"*" true
+                                       :on-after #(debug "Subscribing" %1 "to" %2)}
+                        :on-unsubscribe #(debug "Unsubscribing" %1 "to" %2)
+                        :on-close #(debug "Connection with" %1 "closed having status" %2)
                         :on-call {"cache" (partial send-cache source)
                                   "summary" (partial send-summary source)}})
               topic (subs (:uri request) 1)]
           (when (seq topic)
+            (debug "Got topic in request path - subscribing to" topic)
             (wamp/topic-subscribe topic sess-id)))
         (http/send! channel {:status 400 :body "Server only supports websockets"})))))
 
@@ -69,26 +85,40 @@
 (defrecord WebsocketSource [dirwriter stop-fn open topics cache uri config summary-fn summaries]
   Source
   (publish [this topic message]
-    (when @open
-      (when (dosync
-              (when-not (get @topics topic)
-                (alter topics conj topic)))
-        (when @open (api/add-source dirwriter topic uri)))
-      (wamp/send-event! topic message)
-      (swap! cache update-in [topic]
-             (fn [c] (take (config :cache-size) (conj c message))))
-      (when summary-fn (swap! summaries update-in [topic] summary-fn message))))
+    (let [uuid (UUID/randomUUID)]
+      (debug "Requested to publishing message" uuid "on" topic)
+      (trace "Message" uuid "-" message)
+      (when @open
+        (when (dosync
+                (when-not (get @topics topic)
+                  (alter topics conj topic)))
+          (when @open
+            (api/add-source dirwriter topic uri)
+            (debug "Registered" uri "for topic" topic "in directory service.")))
+        (wamp/send-event! topic message)
+        (let [new-cache (swap! cache update-in [topic]
+                               (fn [c] (take (config :cache-size) (conj c message))))]
+          (debug "Message " uuid "published and cached.")
+          (trace "Cache for" topic "after message" uuid "is:" (get new-cache topic)))
+        (when summary-fn
+          (let [new-summaries (swap! summaries update-in [topic] summary-fn message)]
+            (debug "Summary for" topic "updated with message" uuid)
+            (trace "Summary for" topic "after message" uuid "is:" (get new-summaries topic)))))))
 
   (done [this topic]
+    (debug "Initiated 'done' for" topic)
     (when @open
       (when (dosync (when (get @topics topic)
                       (alter topics disj topic)))
         (when @open
-          (api/remove-source dirwriter topic uri))
+          (api/remove-source dirwriter topic uri)
+          (debug "Unregistered" uri "for topic" topic "in directory service."))
         (when (:clean-cache-on-done config)
-          (swap! cache dissoc topic))
+          (swap! cache dissoc topic)
+          (debug "Cleaned cache for" topic))
         (when (and summary-fn (:clean-summary-on-done config))
-          (swap! summaries dissoc topic))
+          (swap! summaries dissoc topic)
+          (debug "Cleaned summary for" topic))
         ;;---TODO: Send a "done" somehow to the subscribers, and unsubscribe them?
         ))))
 
@@ -135,6 +165,7 @@
                             cache-size 0
                             hostname (. (InetAddress/getLocalHost) getHostName)}
                        :as config}]
+  (info "Starting websocket source with directory writer" directory-writer "and config" config)
   (let [uri (URI. (str "ws://" hostname ":" port))
         stop-fn (atom nil)
         config (assoc config :cache-size cache-size)
@@ -152,7 +183,9 @@
   service."
   [{:keys [stop-fn open uri dirwriter topics] :as source}]
   (when @open
+    (info "Stopping websocket source, using state" source)
     (reset! open false)
     (@stop-fn :timeout 100)
     (dosync (doseq [topic @topics]
+              (debug "Unregistering" uri "for topic" topic "in directory service.")
               (api/remove-source dirwriter topic uri)))))

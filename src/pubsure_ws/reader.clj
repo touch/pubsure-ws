@@ -7,8 +7,10 @@
             [cheshire.core :as json]
             [cheshire.generate :as json-enc]
             [clj-wamp.server :as wamp]
-            [pubsure-ws.temp-fix])
+            [pubsure-ws.temp-fix]
+            [taoensso.timbre :as timbre])
   (:import [java.net URI]))
+(timbre/refer-timbre)
 
 
 ;;; Helper methods and initialisation.
@@ -26,17 +28,21 @@
 (defn- unsubscribe
   "Unsubscribe the given session from the given topic."
   [{:keys [dirreader channels] :as state} sess-id topic]
-  (when-let [sourcesc (get-in @channels [sess-id topic])]
-    (swap! channels update-in [sess-id] dissoc topic)
-    (api/unwatch-sources dirreader topic sourcesc)
-    (async/close! sourcesc)))
+  (debug "Requested to unsubscribe" sess-id "from" topic "...")
+  (if-let [sourcesc (get-in @channels [sess-id topic])]
+    (do (swap! channels update-in [sess-id] dissoc topic)
+        (api/unwatch-sources dirreader topic sourcesc)
+        (async/close! sourcesc)
+        (debug "Unsubscribed" sess-id "from" topic))
+    (debug "Session" sess-id "is not subscribed (anymore) to" topic)))
 
 
 (defn- subscribe
   "Subscribe the given session to the given topic. This starts a
   go-loop, reading from a sliding-buffer channel."
   [{:keys [dirreader config channels open] :as state} sess-id topic]
-  (when (and @open (not (get-in @channels [sess-id topic])))
+  (debug "Requested to subscribe" sess-id "to" topic "...")
+  (if (and @open (not (get-in @channels [sess-id topic])))
     (let [sourcesc (async/chan (async/sliding-buffer (get config :subscribe-buffer 100)))]
       (swap! channels assoc-in [sess-id topic] sourcesc)
       (async/go-loop []
@@ -44,13 +50,16 @@
           (do (wamp/emit-event! topic (dissoc event :topic) sess-id)
               (recur))
           (unsubscribe state sess-id topic)))
-      (api/watch-sources dirreader topic :none sourcesc))))
+      (api/watch-sources dirreader topic :none sourcesc)
+      (debug "Subscribed" sess-id "to" topic))
+    (debug "Cannot subscribe" sess-id "to" topic "- reader is closing or already subscribed.")))
 
 
 (defn- handle-close
   "Handles a closed connection. This will automatically unsubscribe
   the channel from all topics in the DirectoryReader."
   [{:keys [channels] :as state} sess-id status]
+  (debug "Handling close for" sess-id "given status" status)
   (doseq [[topic _] (get @channels sess-id)]
     (unsubscribe state sess-id topic)))
 
@@ -58,17 +67,21 @@
 (defn- send-sources
   "Sends the currently known sources to the caller."
   [{:keys [dirreader open] :as state} topic publish?]
+  (debug "Requested to send sources for" topic "to" wamp/*call-sess-id* "...")
   (if @open
     (let [sources (api/sources dirreader topic)]
       (if publish?
-        (do (doseq [source sources]
+        (do (debug "Sending sources for" topic "to" wamp/*call-sess-id* "as events.")
+            (doseq [source sources]
               (wamp/emit-event! topic {:event :joined, :uri source} wamp/*call-sess-id*))
             {:result (str "Published " (count sources) " sources as events.")})
-        {:result sources}))
-    {:error {:uri topic
-             :message "Server closing"
-             :description (str "The server is closing.")
-             :kill false}}))
+        (do (debug "Sending sources for" topic "to" wamp/*call-sess-id* "as reply.")
+            {:result sources})))
+    (do (debug "Cannot send sources for" topic "to" wamp/*call-sess-id* "- reader is closing.")
+        {:error {:uri topic
+                 :message "Server closing"
+                 :description (str "The server is closing.")
+                 :kill false}})))
 
 
 (defn- make-app*
@@ -76,7 +89,9 @@
   channels and subscriptions. The app accepts Websocket connections
   and HTTP requests."
   [{:keys [dirreader open] :as state}]
+  (info "Creating ring app using state" state)
   (fn [request]
+    (trace "Handling request" request)
     (if @open
       (let [topic (subs (:uri request) 1)]
         (http/with-channel request channel
@@ -91,12 +106,14 @@
                             :on-close (partial handle-close state)
                             :on-call {"sources" (partial send-sources state)}})]
               (when (seq topic)
+                (debug "Request" sess-id "has path to topic" topic "- subscribing to it now")
                 (wamp/topic-subscribe topic sess-id)
                 (subscribe state sess-id topic)))
             (if (seq topic)
               (http/send! channel (json/generate-string (api/sources dirreader topic)))
               (http/send! channel {:status 400 :body "Illegal request"})))))
-      {:status 503 :body "Server is closing"})))
+      (do (debug "Sending 503 - server is closing")
+          {:status 503 :body "Server is closing"}))))
 
 
 (defn make-app
@@ -129,6 +146,7 @@
 
   The returned value can be used for the `stop-server` function."
   [directory-reader & {:keys [port subscribe-buffer] :or {port 8091} :as config}]
+  (info "Starting reader server using directory reader" directory-reader "and config" config "...")
   (let [[state app] (apply make-app directory-reader (flatten config))]
     (reset! (:stop-fn state) (http/run-server app {:port port}))
     state))
@@ -139,15 +157,19 @@
   this function will unwatch the current open watches to the
   DirectoryReader. The app should not and cannot be used afterwards."
   [{:keys [open channels] :as state}]
+  (info "Stopping the reader application ...")
   (reset! open false)
   (doseq [[sess-id topic-chans] @channels
           [topic _] topic-chans]
-    (unsubscribe state sess-id topic)))
+    (unsubscribe state sess-id topic))
+  (info "Stopped the reader application."))
 
 
 (defn stop-server
   "Given the return value of `start-server`, this function will stop
   the server and unsubscribe every watch in the DirectoryReader."
   [{:keys [stop-fn] :as state}]
+  (info "Stopping the reader server ...")
   (stop-app state)
-  (@stop-fn :timeout 100))
+  (@stop-fn :timeout 100)
+  (info "Stopped the reader server."))

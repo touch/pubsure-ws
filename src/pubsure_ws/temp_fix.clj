@@ -1,5 +1,6 @@
 (ns pubsure-ws.temp-fix
-  (:require [clj-wamp.server :as wamp]))
+  (:require [clj-wamp.server :as wamp]
+            [taoensso.timbre :refer (warn)]))
 
 
 ;;; Fix wamp/map-key-or-prefix. Supports catch-all. Pull request posted.
@@ -15,3 +16,5 @@
             m)))
 
 (alter-var-root #'wamp/map-key-or-prefix (constantly map-key-or-prefix))
+
+(warn "Monkey-patched clj-wamp.server/map-key-or-prefix.")

@@ -9,8 +9,8 @@
                  [http-kit "2.1.18"]
                  [clj-wamp "1.0.0"]
                  [cheshire "5.3.1"]
-                 [ring/ring-core "1.2.2"]
-                 [org.clojure/data.codec "0.1.0"]]
+                 [org.clojure/data.codec "0.1.0"]
+                 [com.taoensso/timbre "3.1.6"]]
   :profiles {:test {:dependencies [[stylefruits/gniazdo "0.1.0"]]}}
   :pom-plugins [[com.theoryinpractise/clojure-maven-plugin "1.3.15"
                  {:extensions "true"
