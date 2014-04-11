@@ -162,6 +162,8 @@
   (doseq [[sess-id topic-chans] @channels
           [topic _] topic-chans]
     (unsubscribe state sess-id topic))
+  (doseq [[sess-id _] @wamp/client-channels]
+    (wamp/close-channel sess-id))
   (info "Stopped the reader application."))
 
 
