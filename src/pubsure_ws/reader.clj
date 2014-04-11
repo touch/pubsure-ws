@@ -22,7 +22,8 @@
 ;;; Exposing a DirectoryReader as a Websocket service.
 
 ;; channels = (atom {"sess-id" {"topic" async.chan}})
-(defrecord State [dirreader config channels stop-fn open])
+;; sessions = (atom #{"sess-id"})
+(defrecord State [dirreader config channels stop-fn open sessions])
 
 
 (defn- unsubscribe
@@ -55,13 +56,21 @@
     (debug "Cannot subscribe" sess-id "to" topic "- reader is closing or already subscribed.")))
 
 
+(defn- handle-open
+  "Handles an opened connection. This will register the session, in
+  order to close it whenever the app is stopped."
+  [{:keys [sessions] :as state} sess-id]
+  (swap! sessions conj sess-id))
+
+
 (defn- handle-close
   "Handles a closed connection. This will automatically unsubscribe
   the channel from all topics in the DirectoryReader."
-  [{:keys [channels] :as state} sess-id status]
+  [{:keys [channels sessions] :as state} sess-id status]
   (debug "Handling close for" sess-id "given status" status)
   (doseq [[topic _] (get @channels sess-id)]
-    (unsubscribe state sess-id topic)))
+    (unsubscribe state sess-id topic))
+  (swap! sessions disj sess-id))
 
 
 (defn- send-sources
@@ -103,6 +112,7 @@
                             :on-subscribe {"*" true
                                            :on-after (partial subscribe state)}
                             :on-unsubscribe (partial unsubscribe state)
+                            :on-open (partial handle-open state)
                             :on-close (partial handle-close state)
                             :on-call {"sources" (partial send-sources state)}})]
               (when (seq topic)
@@ -128,7 +138,7 @@
   for the `stop-app` function, and the second is the ring app
   function."
   [directory-reader & {:keys [subscribe-buffer] :as config}]
-  (let [state (State. directory-reader config (atom {}) (atom nil) (atom true))
+  (let [state (State. directory-reader config (atom {}) (atom nil) (atom true) (atom #{}))
         app (make-app* state)]
     [state app]))
 
@@ -156,13 +166,13 @@
   "Given the first item in the return value of `make-app` function,
   this function will unwatch the current open watches to the
   DirectoryReader. The app should not and cannot be used afterwards."
-  [{:keys [open channels] :as state}]
+  [{:keys [open channels sessions] :as state}]
   (info "Stopping the reader application ...")
   (reset! open false)
   (doseq [[sess-id topic-chans] @channels
           [topic _] topic-chans]
     (unsubscribe state sess-id topic))
-  (doseq [[sess-id _] @wamp/client-channels]
+  (doseq [sess-id @sessions]
     (wamp/close-channel sess-id))
   (info "Stopped the reader application."))
 
