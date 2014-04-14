@@ -111,6 +111,9 @@
       (when (dosync (when (get @topics topic)
                       (alter topics disj topic)))
         (when @open
+          (when-let [done-payload (:done-payload config)]
+            (debug "Sending done payload to" topic)
+            (wamp/send-event! topic done-payload))
           (api/remove-source dirwriter topic uri)
           (debug "Unregistered" uri "for topic" topic "in directory service."))
         (when (:clean-cache-on-done config)
@@ -118,9 +121,7 @@
           (debug "Cleaned cache for" topic))
         (when (and summary-fn (:clean-summary-on-done config))
           (swap! summaries dissoc topic)
-          (debug "Cleaned summary for" topic))
-        ;;---TODO: Send a "done" somehow to the subscribers, and unsubscribe them?
-        ))))
+          (debug "Cleaned summary for" topic))))))
 
 
 (defn start-source
@@ -159,6 +160,9 @@
   :wrap-fn - A ring request wrapper function, wrapping around the
   default handler. This can for instance be used for authentication.
 
+  :done-payload - If specified, the given value will be published to a
+  topic when `done` is called for that topic.
+
   Returns the source state record, used for `stop-source`."
   [directory-writer & {:keys [port hostname cache-size summary-fn wrap-fn]
                        :or {port 8090
@@ -181,11 +185,15 @@
   "Given the return value of `start-source`, this stops the Websocket
   server and removes every topic for this source from the directory
   service."
-  [{:keys [stop-fn open uri dirwriter topics] :as source}]
+  [{:keys [stop-fn open uri dirwriter topics config] :as source}]
   (when @open
     (info "Stopping websocket source, using state" source)
     (reset! open false)
     (@stop-fn :timeout 100)
-    (dosync (doseq [topic @topics]
-              (debug "Unregistering" uri "for topic" topic "in directory service.")
-              (api/remove-source dirwriter topic uri)))))
+    (let [done-payload (:done-payload config)]
+      (dosync (doseq [topic @topics]
+                (when done-payload
+                  (debug "Sending done payload to" topic)
+                  (wamp/send-event! topic done-payload))
+                (debug "Unregistering" uri "for topic" topic "in directory service.")
+                (api/remove-source dirwriter topic uri))))))
