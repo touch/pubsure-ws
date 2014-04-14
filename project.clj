@@ -7,7 +7,7 @@
                  [pubsure/pubsure-core "0.1.0-SNAPSHOT"]
                  [org.clojure/core.async "0.1.278.0-76b25b-alpha"]
                  [http-kit "2.1.18"]
-                 [clj-wamp "1.0.0"]
+                 [clj-wamp "1.0.2"]
                  [cheshire "5.3.1"]
                  [org.clojure/data.codec "0.1.0"]
                  [com.taoensso/timbre "3.1.6"]]

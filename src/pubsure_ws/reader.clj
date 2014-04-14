@@ -7,7 +7,6 @@
             [cheshire.core :as json]
             [cheshire.generate :as json-enc]
             [clj-wamp.server :as wamp]
-            [pubsure-ws.temp-fix]
             [taoensso.timbre :as timbre])
   (:import [java.net URI]))
 (timbre/refer-timbre)

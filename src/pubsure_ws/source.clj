@@ -7,11 +7,11 @@
             [clj-wamp.server :as wamp]
             [clojure.string :refer (split)]
             [cheshire.core :as json]
-            [pubsure-ws.temp-fix]
             [taoensso.timbre :as timbre])
   (:import [java.net InetAddress URI]
            [java.util UUID]))
 (timbre/refer-timbre)
+
 
 ;;; WAMP application.
 
