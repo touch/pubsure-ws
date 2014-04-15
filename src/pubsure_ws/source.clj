@@ -53,23 +53,30 @@
 (defn- make-app
   "Creates a ring app, handling the requests and data using WAMP and
   the given source state record."
-  [source]
+  [{:keys [config] :as source}]
   (debug "Creating source app using state" source)
   (fn [request]
     (http/with-channel request channel
       (if (http/websocket? channel)
-        (let [sess-id (wamp/http-kit-handler
+        (let [auth-fn (or (:auth-fn config) (constantly true))
+              sess-id (wamp/http-kit-handler
                        channel
-                       {:on-auth {:allow-anon? true ;---TODO Support authentication?
-                                  :timeout 0}
-                        :on-subscribe {"*" true
+                       {:on-auth {:allow-anon? true ; Authentication is done through :auth-fn.
+                                  :timeout 0} ; Disables RPC authentication.
+                        :on-subscribe {"*" (fn [sess-id topic] (auth-fn request topic :subscribe))
                                        :on-after #(debug "Subscribing" %1 "to" %2)}
                         :on-unsubscribe #(debug "Unsubscribing" %1 "to" %2)
                         :on-close #(debug "Connection with" %1 "closed having status" %2)
-                        :on-call {"cache" (partial send-cache source)
-                                  "summary" (partial send-summary source)}})
+                        :on-call {"cache" (fn [topic & rest]
+                                            (if (auth-fn request topic :cache)
+                                              (apply send-cache source topic rest)
+                                              "Unauthorized"))
+                                  "summary" (fn [topic & rest]
+                                              (if (auth-fn request topic :summary)
+                                                (apply send-summary source topic rest)
+                                                "Unauthorized"))}})
               topic (subs (:uri request) 1)]
-          (when (seq topic)
+          (when (and (seq topic) (auth-fn request topic :subscribe))
             (debug "Got topic in request path - subscribing to" topic)
             (wamp/topic-subscribe topic sess-id)))
         (http/send! channel {:status 400 :body "Server only supports websockets"})))))
@@ -162,6 +169,13 @@
 
   :done-payload - If specified, the given value will be published to a
   topic when `done` is called for that topic.
+
+  :auth-fn - This function checks whether a session may subscribe,
+  retrieve a cache, or retrieve a summary for a particular topic. The
+  function takes the original request, the topic, and a keyword for
+  the requested function (:subscribe, :cache or :summary) as its
+  parameters. The function should return true to allow, false to deny.
+  Default is `(constantly true)`.
 
   Returns the source state record, used for `stop-source`."
   [directory-writer & {:keys [port hostname cache-size summary-fn wrap-fn]
