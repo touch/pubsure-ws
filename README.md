@@ -23,7 +23,8 @@ Add `[pubsure/pubsure-ws "0.1.0-SNAPSHOT"]` to your dependencies in Leiningen.
 * `:summary-fn` - A function that updates a summary value for each topic on every published message. This summary can be retrieved using WAMP RPC (see below). The function takes two arguments; the current summary (which may be nil), and the published message. Default is no function.
 * `:clean-summary-on-done` - A boolean indicating whether to clean the summary for a topic, when the `done` function is called for that topic. Default is false.
 * `:wrap-fn` - A ring wrapper function, which wraps the standard request handling function. This can be used for instance for authentication. Default is no function.
-* `:done-payload` - If specified, the given value will be published to a topic when the `done` function is called for that topic.
+* `:done-payload` - If specified, the given value will be published to a topic when the `done` function is called for that topic. By default this option is not used.
+* `:auth-fn` - This function checks whether a connection may subscribe, retrieve a cache, or retrieve a summary for a particular topic. The function takes the original request, the topic, and a keyword for the requested function (`:subscribe`, `:cache` or `:summary`) as its parameters. The function should return true to allow, false to deny. Default is `(constantly true)`.
 
 ### Usage
 

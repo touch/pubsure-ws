@@ -168,9 +168,10 @@
   default handler. This can for instance be used for authentication.
 
   :done-payload - If specified, the given value will be published to a
-  topic when `done` is called for that topic.
+  topic when `done` is called for that topic. By default this option
+  is not used.
 
-  :auth-fn - This function checks whether a session may subscribe,
+  :auth-fn - This function checks whether a connection may subscribe,
   retrieve a cache, or retrieve a summary for a particular topic. The
   function takes the original request, the topic, and a keyword for
   the requested function (:subscribe, :cache or :summary) as its
