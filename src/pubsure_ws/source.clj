@@ -147,8 +147,8 @@
   :port - The port number where the server will bind to. Default is
   8090.
 
-  :hostname - The hostname to use in the ws:// URI as registered in
-  the directory service. Default is system hostname.
+  :uri - The websocket URI to be registered in the directory service.
+  Default is `ws://system-hostname:port`.
 
   :cache-size - The number of last published messages kept for each
   topic. This cache can be received through WAMP RPC. Default is 0.
@@ -179,13 +179,12 @@
   Default is `(constantly true)`.
 
   Returns the source state record, used for `stop-source`."
-  [directory-writer & {:keys [port hostname cache-size summary-fn wrap-fn]
+  [directory-writer & {:keys [port uri cache-size summary-fn wrap-fn]
                        :or {port 8090
-                            cache-size 0
-                            hostname (. (InetAddress/getLocalHost) getHostName)}
+                            cache-size 0}
                        :as config}]
   (info "Starting websocket source with directory writer" directory-writer "and config" config)
-  (let [uri (URI. (str "ws://" hostname ":" port))
+  (let [uri (or uri (URI. (str "ws://" (. (InetAddress/getLocalHost) getHostName) ":" port)))
         stop-fn (atom nil)
         config (assoc config :cache-size cache-size)
         source (WebsocketSource. directory-writer stop-fn (atom true) (ref #{}) (atom {}) uri
