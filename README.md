@@ -17,7 +17,7 @@ Add `[pubsure/pubsure-ws "0.1.0-SNAPSHOT"]` to your dependencies in Leiningen.
 #### Start options
 
 * `:port` - The port is where the server will bind to. Default is 8090.
-* `:hostname` - The hostname as used in the URI for when the source registers itself in the directory service. Default is the system hostname.
+* `:uri` - The websocket URI to be registered in the directory service. Default is `ws://<system-hostname>:<port>`.
 * `:cache-size` - The number of last published messages to keep per topic. These messages can be retrieved using WAMP RPC (see below). Default is 0.
 * `:clean-cache-on-done` - A boolean indicating whether to clean the cache of messages for a topic, when the `done` function is called for that topic. Default is false.
 * `:summary-fn` - A function that updates a summary value for each topic on every published message. This summary can be retrieved using WAMP RPC (see below). The function takes two arguments; the current summary (which may be nil), and the published message. Default is no function.
