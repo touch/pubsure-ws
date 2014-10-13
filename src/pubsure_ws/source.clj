@@ -164,6 +164,10 @@
   :clean-summary-on-done - Whether to clean the summary when `done` is
   called on the Source. Default is false.
 
+  :summary-ttl - The number of milliseconds to keep the summary for a
+  topic after is was last updated. Defaults to one hour. Set to zero
+  or less to keep summaries indefinite (not recommended).
+
   :wrap-fn - A ring request wrapper function, wrapping around the
   default handler. This can for instance be used for authentication.
 
@@ -179,14 +183,18 @@
   Default is `(constantly true)`.
 
   Returns the source state record, used for `stop-source`."
-  [directory-writer & {:keys [port uri cache-size summary-fn wrap-fn]
+  [directory-writer & {:keys [port uri cache-size summary-fn summary-ttl wrap-fn]
                        :or {port 8090
-                            cache-size 0}
+                            cache-size 0
+                            summary-ttl (* 1000 60 60)}
                        :as config}]
   (info "Starting websocket source with directory writer" directory-writer "and config" config)
   (let [uri (or uri (URI. (str "ws://" (. (InetAddress/getLocalHost) getHostName) ":" port)))
         stop-fn (atom nil)
         config (assoc config :cache-size cache-size)
+        summaries (if (< 0 summary-ttl)
+                    (cache/ttl-cache-factory {} :ttl summary-ttl)
+                    {})
         source (WebsocketSource. directory-writer stop-fn (atom true) (ref #{}) (atom {}) uri
                                  config summary-fn (atom {}))
         app (make-app source)
