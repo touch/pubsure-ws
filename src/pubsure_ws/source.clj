@@ -238,4 +238,6 @@
     (reset! open false)
     (doseq [topic-agent (vals @topics)]
       (send topic-agent done-action config))
+    (when (:done-payload config)
+      (Thread/sleep 1000))
     (@stop-fn :timeout 100)))
