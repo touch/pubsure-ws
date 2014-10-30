@@ -7,7 +7,8 @@
             [clj-wamp.server :as wamp]
             [clojure.string :refer (split)]
             [cheshire.core :as json]
-            [taoensso.timbre :as timbre])
+            [taoensso.timbre :as timbre]
+            [clojure.core.cache :as cache])
   (:import [java.net InetAddress URI]
            [java.util UUID]))
 (timbre/refer-timbre)
@@ -20,9 +21,9 @@
   function takes three parameters: the topic, the size and whether to
   receive the cache items as a response or as published messsages. The
   cache data is availabe in the source state record."
-  [{:keys [cache] :as source} topic size publish?]
+  [{:keys [topics] :as source} topic size publish?]
   (debug "Requested to send " size "items from cache for" topic "to" wamp/*call-sess-id*)
-  (let [messages (reverse (take size (get @cache topic)))
+  (let [messages (reverse (take size (:cache @(get @topics topic))))
         cnt (count messages)]
     (if publish?
       (do (debug "Sending" cnt "cached message for" topic "to" wamp/*call-sess-id* "as events.")
@@ -36,9 +37,9 @@
 (defn- send-summary
   "Sends a summary of the published messages, built by the optional
   summary function given at source creation."
-  [{:keys [summary-fn summaries] :as source} topic]
+  [{:keys [config summaries] :as source} topic]
   (debug "Requested to send summary of" topic "to" wamp/*call-sess-id*)
-  (if summary-fn
+  (if (:summary-fn config)
     (let [summary (get @summaries topic)]
       (debug "Sending summary of" topic "to" wamp/*call-sess-id*)
       (trace "Summary is" summary)
@@ -84,51 +85,74 @@
 
 ;;; Source implementation.
 
-;; topics = (ref #{"topic"})
-;; cache = (atom {"topic" (msg-3 msg-2 msg-1)})
+(defn- publish-action
+  [{:keys [topic registered? cache summaries dirwriter] :as data} config message]
+  (let [uuid (UUID/randomUUID)]
+    (debug "Requested to publishing message" uuid "on" topic)
+    (trace "Message" uuid "-" message)
+
+    (when-not registered?
+      (api/add-source dirwriter topic (:uri config))
+      (debug "Registered" (:uri config) "for topic" topic "in directory service."))
+
+    (wamp/send-event! topic message)
+
+    (when-let [summary-fn (:summary-fn config)]
+      (swap! summaries update-in [topic] (fn [current] (summary-fn current message))))
+
+    (let [new-data (merge data
+                          {:cache (take (:cache-size config) (conj cache message))
+                           :registered? true})]
+      (debug "Message " uuid "published and cached.")
+      (trace "Data for" topic "after message" uuid "is:" new-data)
+      new-data)))
+
+
+(defn- done-action
+  [{:keys [topic registered? cache summaries dirwriter] :as data} config]
+  (debug "Initiated 'done' for" topic)
+
+  (when-let [done-payload (:done-payload config)]
+    (debug "Sending done payload to" topic)
+    (wamp/send-event! topic done-payload))
+
+  (when registered?
+    (api/remove-source dirwriter topic (:uri config))
+    (debug "Unregistered" (:uri config) "for topic" topic "in directory service."))
+
+  (when (:clean-summary-on-done config)
+    (swap! summaries dissoc topic))
+
+  (let [new-data (merge data
+                        {:cache (when-not (:clean-cache-on-done config) cache)
+                         :registered? false})]
+    (debug "Done for topic" topic "processed.")
+    (trace "Data for" topic "after done is:" new-data)
+    new-data))
+
+
+;; topics = (ref {"topic" agent})
 ;; open = (atom boolean)
-;; config = {:cache-size long, :clean-cache-on-done boolean, :clean-summary-on-done boolean}
-;; summaries (atom {"topic", summary})
-(defrecord WebsocketSource [dirwriter stop-fn open topics cache uri config summary-fn summaries]
+;; config = {:cache-size long, :clean-cache-on-done boolean, :clean-summary-on-done boolean,
+;;           :uri URI, :summary-fn nil/fn}
+(defrecord WebsocketSource [dirwriter stop-fn open topics config summaries]
   Source
   (publish [this topic message]
-    (let [uuid (UUID/randomUUID)]
-      (debug "Requested to publishing message" uuid "on" topic)
-      (trace "Message" uuid "-" message)
-      (when @open
-        (when (dosync
-                (when-not (get @topics topic)
-                  (alter topics conj topic)))
-          (when @open
-            (api/add-source dirwriter topic uri)
-            (debug "Registered" uri "for topic" topic "in directory service.")))
-        (wamp/send-event! topic message)
-        (let [new-cache (swap! cache update-in [topic]
-                               (fn [c] (take (config :cache-size) (conj c message))))]
-          (debug "Message " uuid "published and cached.")
-          (trace "Cache for" topic "after message" uuid "is:" (get new-cache topic)))
-        (when summary-fn
-          (let [new-summaries (swap! summaries update-in [topic] summary-fn message)]
-            (debug "Summary for" topic "updated with message" uuid)
-            (trace "Summary for" topic "after message" uuid "is:" (get new-summaries topic)))))))
+    (if @open
+      (let [topic-agent (get (dosync
+                               (if-not (get @topics topic)
+                                 (alter topics assoc topic
+                                        (agent {:topic topic, :registered? false
+                                                :summaries summaries, :dirwriter dirwriter}))
+                                 @topics))
+                             topic)]
+        (send topic-agent publish-action config message))
+      (warn "Trying to 'publish' after the source is closing or closed.")))
 
   (done [this topic]
-    (debug "Initiated 'done' for" topic)
-    (when @open
-      (when (dosync (when (get @topics topic)
-                      (alter topics disj topic)))
-        (when @open
-          (when-let [done-payload (:done-payload config)]
-            (debug "Sending done payload to" topic)
-            (wamp/send-event! topic done-payload))
-          (api/remove-source dirwriter topic uri)
-          (debug "Unregistered" uri "for topic" topic "in directory service."))
-        (when (:clean-cache-on-done config)
-          (swap! cache dissoc topic)
-          (debug "Cleaned cache for" topic))
-        (when (and summary-fn (:clean-summary-on-done config))
-          (swap! summaries dissoc topic)
-          (debug "Cleaned summary for" topic))))))
+    (if-let [topic-agent (get @topics topic)]
+      (send topic-agent done-action config)
+      (warn "Trying to 'done' on topic that never published."))))
 
 
 (defn start-source
@@ -191,12 +215,13 @@
   (info "Starting websocket source with directory writer" directory-writer "and config" config)
   (let [uri (or uri (URI. (str "ws://" (. (InetAddress/getLocalHost) getHostName) ":" port)))
         stop-fn (atom nil)
-        config (assoc config :cache-size cache-size)
-        summaries (if (< 0 summary-ttl)
-                    (cache/ttl-cache-factory {} :ttl summary-ttl)
-                    {})
-        source (WebsocketSource. directory-writer stop-fn (atom true) (ref #{}) (atom {}) uri
-                                 config summary-fn (atom {}))
+        config (assoc config :cache-size cache-size :uri uri)
+        summaries (when summary-fn
+                    (if (< 0 summary-ttl)
+                      (cache/ttl-cache-factory {} :ttl summary-ttl)
+                      {}))
+        source (WebsocketSource. directory-writer stop-fn (atom true) (ref {}) config
+                                 (atom summaries))
         app (make-app source)
         wrapped-app (if wrap-fn (wrap-fn app) app)]
     (reset! stop-fn (http/run-server wrapped-app {:port port}))
@@ -207,15 +232,10 @@
   "Given the return value of `start-source`, this stops the Websocket
   server and removes every topic for this source from the directory
   service."
-  [{:keys [stop-fn open uri dirwriter topics config] :as source}]
+  [{:keys [stop-fn open dirwriter topics config] :as source}]
   (when @open
     (info "Stopping websocket source, using state" source)
     (reset! open false)
-    (@stop-fn :timeout 100)
-    (let [done-payload (:done-payload config)]
-      (dosync (doseq [topic @topics]
-                (when done-payload
-                  (debug "Sending done payload to" topic)
-                  (wamp/send-event! topic done-payload))
-                (debug "Unregistering" uri "for topic" topic "in directory service.")
-                (api/remove-source dirwriter topic uri))))))
+    (doseq [topic-agent (vals @topics)]
+      (send topic-agent done-action config))
+    (@stop-fn :timeout 100)))
