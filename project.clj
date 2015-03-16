@@ -12,7 +12,7 @@
                  [org.clojure/data.codec "0.1.0"]
                  [com.taoensso/timbre "3.1.6"]
                  [org.clojure/core.cache "0.6.4"]]
-  :profiles {:test {:dependencies [[stylefruits/gniazdo "0.1.0"]]}}
+  :profiles {:test {:dependencies [[stylefruits/gniazdo "0.3.1"]]}}
   :pom-plugins [[com.theoryinpractise/clojure-maven-plugin "1.3.15"
                  {:extensions "true"
                   :executions ([:execution

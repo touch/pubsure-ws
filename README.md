@@ -53,9 +53,11 @@ One can call the `"summary"` RPC function in order to receive the summary object
 
 #### Single batch request
 
-Perform a HTTP GET request to `http://<host>:<port>/<topic>` to receive all currently known sources of the given topic. The response is a JSON array, holding strings with URIs.
+_**Disabled for now ([see](https://github.com/touch/pubsure-ws/blob/778768a7388fe831a2e044d86be38c9a7392c5b2/test/pubsure_ws/reader_test.clj#L51)). Let me know if this is desired!**_
 
-For example:
+~~Perform a HTTP GET request to `http://<host>:<port>/<topic>` to receive all currently known sources of the given topic. The response is a JSON array, holding strings with URIs.~~
+
+~~For example:~~
 
 ```
 > curl localhost:8091/foo

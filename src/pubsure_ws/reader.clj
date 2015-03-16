@@ -102,25 +102,21 @@
     (trace "Handling request" request)
     (if @open
       (let [topic (subs (:uri request) 1)]
-        (http/with-channel request channel
-          (if (http/websocket? channel)
-            (let [sess-id (wamp/http-kit-handler
-                           channel
-                           {:on-auth {:allow-anon? true ;---TODO Support authentication?
-                                      :timeout 0}
-                            :on-subscribe {"*" true
-                                           :on-after (partial subscribe state)}
-                            :on-unsubscribe (partial unsubscribe state)
-                            :on-open (partial handle-open state)
-                            :on-close (partial handle-close state)
-                            :on-call {"sources" (partial send-sources state)}})]
-              (when (seq topic)
-                (debug "Request" sess-id "has path to topic" topic "- subscribing to it now")
-                (wamp/topic-subscribe topic sess-id)
-                (subscribe state sess-id topic)))
-            (if (seq topic)
-              (http/send! channel (json/generate-string (api/sources dirreader topic)))
-              (http/send! channel {:status 400 :body "Illegal request"})))))
+        (wamp/with-channel-validation request channel #".*"
+          (let [sess-id (wamp/http-kit-handler
+                         channel
+                         {:on-auth {:allow-anon? true ;---TODO Support authentication?
+                                    :timeout 0}
+                          :on-subscribe {"*" true
+                                         :on-after (partial subscribe state)}
+                          :on-unsubscribe (partial unsubscribe state)
+                          :on-open (partial handle-open state)
+                          :on-close (partial handle-close state)
+                          :on-call {"sources" (partial send-sources state)}})]
+            (when (seq topic)
+              (debug "Request" sess-id "has path to topic" topic "- subscribing to it now")
+              (wamp/topic-subscribe topic sess-id)
+              (subscribe state sess-id topic)))))
       (do (debug "Sending 503 - server is closing")
           {:status 503 :body "Server is closing"}))))
 

@@ -57,30 +57,28 @@
   [{:keys [config] :as source}]
   (debug "Creating source app using state" source)
   (fn [request]
-    (http/with-channel request channel
-      (if (http/websocket? channel)
-        (let [auth-fn (or (:auth-fn config) (constantly true))
-              sess-id (wamp/http-kit-handler
-                       channel
-                       {:on-auth {:allow-anon? true ; Authentication is done through :auth-fn.
-                                  :timeout 0} ; Disables RPC authentication.
-                        :on-subscribe {"*" (fn [sess-id topic] (auth-fn request topic :subscribe))
-                                       :on-after #(debug "Subscribing" %1 "to" %2)}
-                        :on-unsubscribe #(debug "Unsubscribing" %1 "to" %2)
-                        :on-close #(debug "Connection with" %1 "closed having status" %2)
-                        :on-call {"cache" (fn [topic & rest]
-                                            (if (auth-fn request topic :cache)
-                                              (apply send-cache source topic rest)
-                                              "Unauthorized"))
-                                  "summary" (fn [topic & rest]
-                                              (if (auth-fn request topic :summary)
-                                                (apply send-summary source topic rest)
-                                                "Unauthorized"))}})
-              topic (subs (:uri request) 1)]
-          (when (and (seq topic) (auth-fn request topic :subscribe))
-            (debug "Got topic in request path - subscribing to" topic)
-            (wamp/topic-subscribe topic sess-id)))
-        (http/send! channel {:status 400 :body "Server only supports websockets"})))))
+    (wamp/with-channel-validation request channel #".*"
+      (let [auth-fn (or (:auth-fn config) (constantly true))
+            sess-id (wamp/http-kit-handler
+                     channel
+                     {:on-auth {:allow-anon? true ; Authentication is done through :auth-fn.
+                                :timeout 0} ; Disables RPC authentication.
+                      :on-subscribe {"*" (fn [sess-id topic] (auth-fn request topic :subscribe))
+                                     :on-after #(debug "Subscribing" %1 "to" %2)}
+                      :on-unsubscribe #(debug "Unsubscribing" %1 "to" %2)
+                      :on-close #(debug "Connection with" %1 "closed having status" %2)
+                      :on-call {"cache" (fn [topic & rest]
+                                          (if (auth-fn request topic :cache)
+                                            (apply send-cache source topic rest)
+                                            "Unauthorized"))
+                                "summary" (fn [topic & rest]
+                                            (if (auth-fn request topic :summary)
+                                              (apply send-summary source topic rest)
+                                              "Unauthorized"))}})
+            topic (subs (:uri request) 1)]
+        (when (and (seq topic) (auth-fn request topic :subscribe))
+          (debug "Got topic in request path - subscribing to" topic)
+          (wamp/topic-subscribe topic sess-id))))))
 
 
 ;;; Source implementation.
