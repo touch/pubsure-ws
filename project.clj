@@ -3,12 +3,12 @@
   :url "https://github.com/touch/pubsure-ws"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.5.1"]
+  :dependencies [[org.clojure/clojure "1.6.0"]
                  [pubsure/pubsure-core "0.1.0-SNAPSHOT"]
                  [org.clojure/core.async "0.1.278.0-76b25b-alpha"]
                  [http-kit "2.1.18"]
                  [clj-wamp "1.0.2"]
-                 [cheshire "5.3.1"]
+                 [cheshire "5.4.0"]
                  [org.clojure/data.codec "0.1.0"]
                  [com.taoensso/timbre "3.1.6"]
                  [org.clojure/core.cache "0.6.4"]]
