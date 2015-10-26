@@ -30,7 +30,11 @@
   [{:keys [dirreader channels] :as state} sess-id topic]
   (debug "Requested to unsubscribe" sess-id "from" topic "...")
   (if-let [sourcesc (get-in @channels [sess-id topic])]
-    (do (swap! channels update-in [sess-id] dissoc topic)
+    (do (swap! channels (fn [curval]
+                          (let [newval (update-in curval [sess-id] dissoc topic)]
+                            (if (empty? (get newval sess-id))
+                              (dissoc newval sess-id)
+                              newval))))
         (api/unwatch-sources dirreader topic sourcesc)
         (async/close! sourcesc)
         (debug "Unsubscribed" sess-id "from" topic))
