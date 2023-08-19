@@ -2,7 +2,7 @@
   "A directory service reader supporting websockets and http requests."
   (:require [pubsure.core :as api]
             [org.httpkit.server :as http]
-            [clojure.core.async :as async]
+            [clojure.core.async :as async :refer [<!]]
             [clojure.string :refer (upper-case lower-case split)]
             [cheshire.core :as json]
             [cheshire.generate :as json-enc]
